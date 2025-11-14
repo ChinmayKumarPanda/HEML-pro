@@ -1,0 +1,56 @@
+name: Simple CI-CD
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1) Configure AWS keys
+      - name: AWS Login
+        run: |
+          aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+          aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+          aws configure set default.region ap-south-1
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      # 2) Login to ECR
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region ap-south-1 \
+          | docker login --username AWS --password-stdin 020571893043.dkr.ecr.ap-south-1.amazonaws.com
+
+      # 3) Build & push Docker image
+      - name: Build & Push
+        run: |
+          docker build -t 020571893043.dkr.ecr.ap-south-1.amazonaws.com/myapp:${{ github.sha }} .
+          docker push 020571893043.dkr.ecr.ap-south-1.amazonaws.com/myapp:${{ github.sha }}
+
+      # 4) Install kubectl & helm
+      - name: Install kubectl & helm
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      # 5) Configure kubectl for EKS
+      - name: Update kubeconfig
+        run: |
+          aws eks --region ap-south-1 update-kubeconfig --name $CLUSTER_NAME
+        env:
+          CLUSTER_NAME: ${{ secrets.CLUSTER_NAME }}
+
+      # 6) Deploy using Helm
+      - name: Helm Deploy
+        run: |
+          helm upgrade --install myapp ./charts/myapp \
+            --namespace prod --create-namespace \
+            --set image.repository=020571893043.dkr.ecr.ap-south-1.amazonaws.com/myapp \
+            --set image.tag=${{ github.sha }}
